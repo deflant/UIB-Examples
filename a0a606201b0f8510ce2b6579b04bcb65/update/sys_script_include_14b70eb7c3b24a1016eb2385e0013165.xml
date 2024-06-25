@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_script_include">
+    <sys_script_include action="INSERT_OR_UPDATE">
+        <access>package_private</access>
+        <active>true</active>
+        <api_name>x_snc_uib_examples.KanbanBoardUtil</api_name>
+        <caller_access/>
+        <client_callable>false</client_callable>
+        <description>tableName: The name of the table from which the data will be retrieved. This table will be used to populate the columns and tasks on the Kanban board.&#13;
+columnField: The field in the selected table that determines the column headers for the Kanban board. This field will be used to categorize tasks into different columns based on its values.</description>
+        <name>KanbanBoardUtil</name>
+        <script><![CDATA[var KanbanBoardUtil = Class.create();
+KanbanBoardUtil.prototype = {
+    initialize: function() {
+        this.laneValues = {};
+        this.primaryColors = ["#ff6b6b", "#ffd93b", "#4caf50", "#2196f3"]; // Colors for Backlog, Doing, Review, Done
+    },
+
+    getKanbanData: function(tableName, columnField, filter) {
+        // Default the filter parameter to an empty string if it is not provided
+        filter = filter || '';
+       
+        this._populateLaneValues(tableName, columnField);
+        this._populateLaneCountAndTotalCount(tableName, columnField, filter);
+        this.laneColors = this._generateColors(Object.keys(this.laneValues).length); // Generate colors based on the number of lanes
+
+        var lanes = this._buildLaneData();
+        var cards = this._getCards(tableName, columnField, filter);
+        var tableLabel = this._getTableLabel(tableName);
+
+        return {
+            lanes: lanes,
+            cards: cards,
+            cardsCount: cards.length,
+            tableName: tableName,
+            tableLabel: tableLabel
+        };
+    },
+
+    _getTableLabel: function(tableName) {
+        var gr = new GlideRecord(tableName);
+        return gr.getLabel();
+    },
+
+    _populateLaneValues: function(tableName, columnField) {
+        var ga = new GlideAggregate(tableName);
+        ga.groupBy(columnField);
+        ga.query();
+        while (ga.next()) {
+            var value = ga.getValue(columnField);
+            this.laneValues[value] = {
+                "label": ga.getDisplayValue(columnField),
+                "count": 0
+            };
+        }
+    },
+
+    _populateLaneCountAndTotalCount: function(tableName, columnField, filter) {
+        var ga = new GlideAggregate(tableName);
+        ga.addAggregate('COUNT');
+        ga.groupBy(columnField);
+        ga.addEncodedQuery(filter);
+        ga.query();
+        while (ga.next()) {
+            var laneValue = ga.getValue(columnField);
+            var laneCount = Number(ga.getAggregate('COUNT'));
+            if (this.laneValues[laneValue]) {
+                this.laneValues[laneValue].count = laneCount;
+            }
+        }
+    },
+
+    _buildLaneData: function() {
+        var lanes = [];
+        var colorIndex = 0;
+        for (var laneValue in this.laneValues) {
+            var headerColor = this.laneColors[colorIndex];
+            var backgroundColor = this._lightenColor(headerColor, 0.8);
+            lanes.push({
+                id: laneValue,
+                title: this.laneValues[laneValue].label,
+                name: this.laneValues[laneValue].label,
+                cardsCount: this.laneValues[laneValue].count,
+                _style_: {
+                    "lane-footer-container": {
+                        "bottom": "30px",
+                        "position": "sticky"
+                    },
+                    "sn-lane": {
+                        "height": "100%",
+                        "overflow-y": "auto",
+                        width: "300px",
+                        padding: "5px",
+                        "background": backgroundColor
+                    },
+                    "sn-lane-header": {
+                        width: "300px",
+                        padding: "5px",
+                        "background": backgroundColor
+                    },
+                    "sn-vtb-lane-header": {
+                        "background": headerColor
+                    }
+                },
+                options: {
+                    "board_type": "FREEFORM",
+                    "can_add_task": true,
+                    "highest_lane_order": 2,
+                    "is2DBoard": false,
+                    "lane_count": 3,
+                    "lane_field": "__KANBAN__",
+                    "lane_filter": "",
+                    "swimlane_field": "",
+                    "table": "task",
+                    "total_lane_count": 3
+                }
+            });
+            colorIndex = (colorIndex + 1) % this.laneColors.length;
+        }
+        return lanes;
+    },
+
+    _getCards: function(tableName, columnField, filter) {
+        var cards = [];
+        var gr = new GlideRecord(tableName);
+        gr.addEncodedQuery(filter);
+        gr.query();
+        while (gr.next()) {
+            cards.push({
+                id: gr.getUniqueValue(),
+                title: gr.getDisplayValue(),
+                order: cards.length,
+                lane_id: gr.getValue(columnField),
+                due_date_display_value: "6/30/2024", //Label for due date in sn-vtb-card-info-inline
+
+                options: {
+                    board_type: "FREEFORM",
+                    card_type: "classic",
+                    show_labels: true, //displays the labels (dots) between header and description
+                    show_card_info: true, //displays record fields as label value tabbed
+                    show_cover_image: true, //displays attachments
+                    due_date_field: "due_date", //record field that is used for the due date in sn-vtb-card-info-inline
+                    show_sla: true //displays the SLA in sn-vtb-card-info-inline
+                },
+                attachments: [],
+                record: {
+                    short_description: {
+                        display_value: gr.getDisplayValue('short_description')
+                    },
+                    description: {
+                        display_value: gr.getDisplayValue('description')
+                    },
+                }
+            });
+        }
+        return cards;
+    },
+
+    _generateColors: function(numColors) {
+        var colors = [];
+        for (var i = 0; i < this.primaryColors.length - 1; i++) {
+            colors.push(this.primaryColors[i]);
+            var nextColor = this.primaryColors[i + 1];
+            var startColor = this._hexToRgb(this.primaryColors[i]);
+            var endColor = this._hexToRgb(nextColor);
+            var stepCount = Math.ceil(numColors / (this.primaryColors.length - 1));
+            for (var j = 1; j < stepCount; j++) {
+                var stepColor = this._interpolateColor(startColor, endColor, j / stepCount);
+                colors.push(this._rgbToHex(stepColor));
+            }
+        }
+        colors.push(this.primaryColors[this.primaryColors.length - 1]);
+        return colors.slice(0, numColors);
+    },
+
+    _hexToRgb: function(hex) {
+        var bigint = parseInt(hex.slice(1), 16);
+        var r = (bigint >> 16) & 255;
+        var g = (bigint >> 8) & 255;
+        var b = bigint & 255;
+        return {
+            r: r,
+            g: g,
+            b: b
+        };
+    },
+
+    _rgbToHex: function(rgb) {
+        var r = rgb.r.toString(16).padStart(2, '0');
+        var g = rgb.g.toString(16).padStart(2, '0');
+        var b = rgb.b.toString(16).padStart(2, '0');
+        return `#${r}${g}${b}`;
+    },
+
+    _interpolateColor: function(color1, color2, factor) {
+        var r = Math.round(color1.r + factor * (color2.r - color1.r));
+        var g = Math.round(color1.g + factor * (color2.g - color1.g));
+        var b = Math.round(color1.b + factor * (color2.b - color1.b));
+        return {
+            r: r,
+            g: g,
+            b: b
+        };
+    },
+
+    _lightenColor: function(color, factor) {
+        var rgb = this._hexToRgb(color);
+        rgb.r = Math.round(rgb.r + factor * (255 - rgb.r));
+        rgb.g = Math.round(rgb.g + factor * (255 - rgb.g));
+        rgb.b = Math.round(rgb.b + factor * (255 - rgb.b));
+        return this._rgbToHex(rgb);
+    },
+
+    type: 'KanbanBoardUtil'
+};]]></script>
+        <sys_class_name>sys_script_include</sys_class_name>
+        <sys_created_by>Marc.Mouries</sys_created_by>
+        <sys_created_on>2024-06-21 22:51:55</sys_created_on>
+        <sys_id>14b70eb7c3b24a1016eb2385e0013165</sys_id>
+        <sys_mod_count>27</sys_mod_count>
+        <sys_name>KanbanBoardUtil</sys_name>
+        <sys_package display_value="UIB Examples" source="x_snc_uib_examples">a0a606201b0f8510ce2b6579b04bcb65</sys_package>
+        <sys_policy>read</sys_policy>
+        <sys_scope display_value="UIB Examples">a0a606201b0f8510ce2b6579b04bcb65</sys_scope>
+        <sys_update_name>sys_script_include_14b70eb7c3b24a1016eb2385e0013165</sys_update_name>
+        <sys_updated_by>Marc.Mouries</sys_updated_by>
+        <sys_updated_on>2024-06-23 18:00:53</sys_updated_on>
+    </sys_script_include>
+</record_update>
